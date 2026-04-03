@@ -304,14 +304,29 @@ async def save_file_and_register(msg: Message, meta: dict):
     size = meta["size"]
     path = meta["path"]
 
-    # download file
-    await app.download_media(msg, file_name=path)
+    # ensure directory exists
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+
+    # download file from Telegram to local path
+    try:
+        await app.download_media(msg, file_name=path)
+    except Exception as e:
+        log.error(f"Failed to download media: {e}")
+        raise
+
+    # verify size from disk (more reliable than Telegram size)
+    try:
+        real_size = os.path.getsize(path)
+        if real_size > 0:
+            size = real_size
+    except Exception as e:
+        log.error(f"Failed to stat downloaded file: {e}")
 
     files = load_files()
     files[fid] = {
         "sid": sid,
         "name": name,
-        "size": size,
+        "size": int(size),
         "time": str(datetime.now()),
         "chat_id": msg.chat.id,
         "msg_id": msg.id,
@@ -320,6 +335,8 @@ async def save_file_and_register(msg: Message, meta: dict):
     # enforce 500MB limit
     files = enforce_storage_limit(files, MAX_STORAGE_BYTES)
     save_files(files)
+
+    log.info(f"Saved file {name} at {path} ({human_size(size)})")
 
     return sid, name, size
 
