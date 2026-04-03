@@ -30,7 +30,7 @@ PORT = int(os.getenv("PORT", "8080"))  # Railway yahi set karega
 
 # PUBLIC_BASE ko env se lo: e.g. local pe http://localhost:8080
 # Railway pe: https://<your-app>.up.railway.app
-PUBLIC_BASE = os.getenv("PUBLIC_BASE", "steamerbot-production.up.railway.app:8080").rstrip("/")
+PUBLIC_BASE = os.getenv("PUBLIC_BASE", "filestream-bot.railway.internal:8080").rstrip("/")
 
 # /clean command ke liye owner
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
