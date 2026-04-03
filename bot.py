@@ -28,7 +28,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 FQDN = "0.0.0.0"
 PORT = int(os.getenv("PORT", "8080"))  # Railway will set this
 
-PUBLIC_BASE = os.getenv("PUBLIC_BASE", "http://localhost:8080").rstrip("/")
+PUBLIC_BASE = os.getenv("PUBLIC_BASE", "https://filestream-bot-production.up.railway.app").rstrip("/")
 
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 
