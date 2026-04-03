@@ -1,0 +1,11 @@
+__pycache__
+.pyc
+.pyo
+.pyd
+.session
+.log
+env
+venv
+.venv
+files.json
+FastFileStreamBot.session
