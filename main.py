@@ -2,107 +2,106 @@ import os
 import time
 import asyncio
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, HTMLResponse
 from pyrogram import Client, filters
 
-# ===== CONFIG =====
 API_ID = int(os.getenv("API_ID", "0"))
 API_HASH = os.getenv("API_HASH", "")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
-CHANNEL_ID = os.getenv("CHANNEL_ID", "")  # public username recommended
+CHANNEL_ID = os.getenv("CHANNEL_ID", "")
 BASE_URL = os.getenv("BASE_URL", "http://127.0.0.1:8000")
 
 app = FastAPI()
 
-bot = Client(
-    "bot",
-    api_id=API_ID,
-    api_hash=API_HASH,
-    bot_token=BOT_TOKEN,
-    workers=10
-)
+bot = Client("bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-# ===== IN-MEM DB =====
-links_db = {}  # {message_id: expiry_timestamp}
+links_db = {}  # file_id: {expiry, size}
 
-# ===== STARTUP / SHUTDOWN =====
+# ===== START =====
 @app.on_event("startup")
-async def startup_event():
-    # ensure event loop exists
-    loop = asyncio.get_event_loop()
-    if not loop.is_running():
-        asyncio.set_event_loop(asyncio.new_event_loop())
+async def startup():
     await bot.start()
 
 @app.on_event("shutdown")
-async def shutdown_event():
+async def shutdown():
     await bot.stop()
 
 # ===== BOT =====
-@bot.on_message(filters.command("start") & filters.private)
-async def start(client, message):
-    await message.reply("Send file → get fast download link ⚡")
-
 @bot.on_message(filters.private & filters.media)
 async def handle_file(client, message):
-    try:
-        # copy to channel
-        msg = await message.copy(CHANNEL_ID)
 
-        # get file size
-        size = 0
-        if msg.document:
-            size = msg.document.file_size
-        elif msg.video:
-            size = msg.video.file_size
-        elif msg.audio:
-            size = msg.audio.file_size
+    msg = await message.copy(CHANNEL_ID)
 
-        # ===== TIMER =====
-        if size < 50 * 1024 * 1024:
-            expiry = 3600 * 24
-        elif size < 500 * 1024 * 1024:
-            expiry = 3600 * 6
-        else:
-            expiry = 3600 * 1
+    size = 0
+    if msg.document:
+        size = msg.document.file_size
+    elif msg.video:
+        size = msg.video.file_size
+    elif msg.audio:
+        size = msg.audio.file_size
 
-        expire_time = time.time() + expiry
-        links_db[msg.id] = expire_time
+    expiry = 3600
+    links_db[msg.id] = {
+        "expiry": time.time() + expiry,
+        "size": size
+    }
 
-        link = f"{BASE_URL}/file/{msg.id}"
+    link = f"{BASE_URL}/file/{msg.id}"
 
-        await message.reply(
-            f"⚡ Link:\n{link}\n⏳ Expires in {expiry//3600}h"
-        )
+    await message.reply(f"⚡ Link:\n{link}")
 
-    except Exception as e:
-        await message.reply(f"Error: {str(e)}")
+# ===== STATUS PAGE =====
+@app.get("/file/{file_id}", response_class=HTMLResponse)
+async def status_page(file_id: int):
 
-# ===== STREAM =====
-@app.get("/file/{file_id}")
+    if file_id not in links_db:
+        return "Invalid link"
+
+    size = links_db[file_id]["size"]
+
+    # fake ETA logic (approx)
+    speed = 5 * 1024 * 1024  # 5MB/s assumption
+    eta = int(size / speed)
+
+    return f"""
+    <html>
+    <head>
+        <title>Preparing Download</title>
+    </head>
+    <body style="background:#111;color:#fff;text-align:center;margin-top:100px;font-family:sans-serif;">
+        <h2>⏳ Preparing your file...</h2>
+        <p>Estimated time: {eta} seconds</p>
+        <p>File size: {round(size/1024/1024,2)} MB</p>
+        <p>Please wait...</p>
+
+        <script>
+            setTimeout(function(){{
+                window.location.href = "/download/{file_id}";
+            }}, 2000);
+        </script>
+    </body>
+    </html>
+    """
+
+# ===== ACTUAL DOWNLOAD =====
+@app.get("/download/{file_id}")
 async def stream(file_id: int):
 
-    # check valid
     if file_id not in links_db:
-        raise HTTPException(status_code=404, detail="Invalid link")
+        raise HTTPException(404)
 
-    if time.time() > links_db[file_id]:
-        raise HTTPException(status_code=403, detail="Link expired")
+    if time.time() > links_db[file_id]["expiry"]:
+        raise HTTPException(403, "Link expired")
 
-    try:
-        msg = await bot.get_messages(CHANNEL_ID, file_id)
+    msg = await bot.get_messages(CHANNEL_ID, file_id)
 
-        async def file_stream():
-            async for chunk in bot.stream_media(msg):
-                yield chunk
+    async def generator():
+        async for chunk in bot.stream_media(msg):
+            yield chunk
 
-        return StreamingResponse(
-            file_stream(),
-            headers={
-                "Content-Disposition": "attachment",
-                "Content-Type": "application/octet-stream"
-            }
-        )
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    return StreamingResponse(
+        generator(),
+        headers={
+            "Content-Disposition": "attachment"
+        }
+    )
