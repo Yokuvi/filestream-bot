@@ -1,7 +1,7 @@
 import os
 import threading
 import asyncio
-from flask import Flask, Response
+from flask import Flask, send_file
 from pyrogram import Client, filters
 
 # ===== CONFIG =====
@@ -27,27 +27,30 @@ async def start(client, message):
 
 @bot.on_message(filters.private & filters.media)
 async def handle_file(client, message):
-    msg = await message.copy(CHANNEL_ID)
-    link = f"{BASE_URL}/file/{msg.id}"
-    await message.reply(link)
+    try:
+        msg = await message.copy(CHANNEL_ID)
+        link = f"{BASE_URL}/file/{msg.id}"
+        await message.reply(link)
+    except Exception as e:
+        await message.reply(f"Error: {str(e)}")
 
-# ===== STREAM DOWNLOAD =====
+# ===== DOWNLOAD (SAFE METHOD) =====
 @app.route("/file/<int:file_id>")
-def stream(file_id):
-
-    async def generate():
-        msg = await bot.get_messages(CHANNEL_ID, file_id)
-        async for chunk in bot.stream_media(msg):
-            yield chunk
+def download(file_id):
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
-    gen = loop.run_until_complete(generate())
+    async def get_file():
+        msg = await bot.get_messages(CHANNEL_ID, file_id)
+        file_path = await bot.download_media(msg)
+        return file_path
 
-    return Response(gen, headers={
-        "Content-Disposition": "attachment"
-    })
+    try:
+        file_path = loop.run_until_complete(get_file())
+        return send_file(file_path, as_attachment=True)
+    except Exception as e:
+        return f"ERROR: {str(e)}", 500
 
 # ===== RUN =====
 def run_web():
