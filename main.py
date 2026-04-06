@@ -8,7 +8,10 @@ from pyrogram import Client, filters
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
+
+# ⚠️ USE USERNAME INSTEAD OF -100 ID
+CHANNEL_ID = os.getenv("CHANNEL_ID")  # example: mychannel
+
 BASE_URL = os.getenv("BASE_URL")
 
 app = Flask(__name__)
@@ -23,19 +26,14 @@ bot = Client(
 # ===== BOT =====
 @bot.on_message(filters.command("start") & filters.private)
 async def start(client, message):
-    await message.reply("Send any file. I’ll give you a download link.")
+    await message.reply("Send file. I’ll give link.")
 
 @bot.on_message(filters.private & filters.media)
 async def handle_file(client, message):
     try:
-        # copy file to channel
         msg = await message.copy(CHANNEL_ID)
-
-        # generate link
         link = f"{BASE_URL}/file/{msg.id}"
-
-        await message.reply(f"⚡ Download Link:\n{link}")
-
+        await message.reply(link)
     except Exception as e:
         await message.reply(f"Error: {str(e)}")
 
