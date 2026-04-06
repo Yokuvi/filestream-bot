@@ -1,7 +1,7 @@
 import os
 import threading
 import asyncio
-from flask import Flask, Response
+from flask import Flask, send_file
 from pyrogram import Client, filters
 from pyrogram.types import Message
 
@@ -24,7 +24,7 @@ tg = Client(
 # ===== BOT =====
 @tg.on_message(filters.command("start") & filters.private)
 async def start(client, message):
-    await message.reply("🔥 Bot working!\nSend or forward file 😎")
+    await message.reply("🔥 Bot ready. Send or forward file.")
 
 @tg.on_message(filters.private)
 async def handle_file(client: Client, message: Message):
@@ -35,7 +35,7 @@ async def handle_file(client: Client, message: Message):
     if file:
         msg = await message.copy(CHANNEL_ID)
 
-    # FORWARDED FILE
+    # FORWARDED FILE (TYPE 1 - normal forward)
     elif message.forward_from_chat and message.forward_from_message_id:
         try:
             msg = await client.copy_message(
@@ -44,42 +44,39 @@ async def handle_file(client: Client, message: Message):
                 message_id=message.forward_from_message_id
             )
         except:
-            return await message.reply("❌ Cannot access forwarded file")
+            return  # ignore silently (no spam)
+
+    # FORWARDED FILE (TYPE 2 - hidden origin / protected)
+    elif message.document or message.video or message.audio:
+        try:
+            msg = await message.copy(CHANNEL_ID)
+        except:
+            return
 
     else:
-        return await message.reply("❌ Send or forward a valid file")
+        return  # no spam reply
 
     link = f"{BASE_URL}/file/{msg.id}"
 
-    await message.reply(f"⚡ Download Link:\n{link}")
+    await message.reply(f"⚡ Download:\n{link}")
 
-# ===== STREAM (DOWNLOAD FIX) =====
+# ===== DOWNLOAD ROUTE =====
 @app.route("/file/<int:file_id>")
-def stream(file_id):
+def download(file_id):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
-    async def get_file():
+    async def fetch():
         msg = await tg.get_messages(CHANNEL_ID, file_id)
-        file_path = await tg.download_media(msg)
-        return file_path
+        path = await tg.download_media(msg)
+        return path
 
     try:
-        file_path = loop.run_until_complete(get_file())
+        file_path = loop.run_until_complete(fetch())
     except Exception as e:
-        return f"Error: {str(e)}", 500
+        return f"ERROR: {str(e)}", 500
 
-    def generate():
-        with open(file_path, "rb") as f:
-            while True:
-                chunk = f.read(1024 * 1024)
-                if not chunk:
-                    break
-                yield chunk
-
-    return Response(generate(), headers={
-        "Content-Disposition": "attachment"
-    })
+    return send_file(file_path, as_attachment=True)
 
 # ===== RUN =====
 def run_flask():
