@@ -21,21 +21,28 @@ tg = Client(
     bot_token=BOT_TOKEN
 )
 
-# ===== BOT =====
+# ===== START =====
 @tg.on_message(filters.command("start") & filters.private)
 async def start(client, message):
     await message.reply("🔥 Bot ready. Send or forward file.")
 
+# ===== FILE HANDLER =====
 @tg.on_message(filters.private)
 async def handle_file(client: Client, message: Message):
 
+    # ignore commands (fix spam)
+    if message.text and message.text.startswith("/"):
+        return
+
     file = message.document or message.video or message.audio
+
+    msg = None
 
     # DIRECT FILE
     if file:
         msg = await message.copy(CHANNEL_ID)
 
-    # FORWARDED FILE (TYPE 1 - normal forward)
+    # FORWARDED FILE (if accessible)
     elif message.forward_from_chat and message.forward_from_message_id:
         try:
             msg = await client.copy_message(
@@ -44,23 +51,17 @@ async def handle_file(client: Client, message: Message):
                 message_id=message.forward_from_message_id
             )
         except:
-            return  # ignore silently (no spam)
+            pass
 
-    # FORWARDED FILE (TYPE 2 - hidden origin / protected)
-    elif message.document or message.video or message.audio:
-        try:
-            msg = await message.copy(CHANNEL_ID)
-        except:
-            return
-
-    else:
-        return  # no spam reply
+    # if still nothing → ignore silently (NO SPAM)
+    if not msg:
+        return
 
     link = f"{BASE_URL}/file/{msg.id}"
 
     await message.reply(f"⚡ Download:\n{link}")
 
-# ===== DOWNLOAD ROUTE =====
+# ===== DOWNLOAD =====
 @app.route("/file/<int:file_id>")
 def download(file_id):
     loop = asyncio.new_event_loop()
