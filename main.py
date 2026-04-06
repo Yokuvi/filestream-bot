@@ -1,5 +1,5 @@
 import os
-import asyncio
+import threading
 from flask import Flask, Response
 from pyrogram import Client, filters
 from pyrogram.types import Message
@@ -20,21 +20,16 @@ tg = Client(
 )
 
 # ========= BOT =========
-@tg.on_message(filters.private & filters.command("start"))
-async def start_cmd(client, message):
-    await message.reply(
-        "🔥 Send me any file\n\nI will give you a FAST direct download link 😎"
-    )
+@tg.on_message(filters.command("start") & filters.private)
+async def start(client, message):
+    await message.reply("🔥 Bot working! Send file 😎")
 
 @tg.on_message(filters.private & (filters.document | filters.video | filters.audio))
-async def handle_file(client: Client, message: Message):
+async def file_handler(client: Client, message: Message):
     msg = await message.copy(CHANNEL_ID)
-
     link = f"{BASE_URL}/file/{msg.id}"
 
-    await message.reply(
-        f"✅ Uploaded successfully!\n\n⚡ Fast Link:\n{link}"
-    )
+    await message.reply(f"⚡ Link:\n{link}")
 
 # ========= STREAM =========
 @app.route("/file/<int:file_id>")
@@ -49,12 +44,14 @@ def stream(file_id):
         "Content-Disposition": "attachment"
     })
 
-# ========= MAIN =========
-async def main():
-    await tg.start()
-
+# ========= RUN =========
+def run_flask():
     port = int(os.getenv("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    # start flask in thread
+    threading.Thread(target=run_flask).start()
+
+    # start bot properly
+    tg.run()
