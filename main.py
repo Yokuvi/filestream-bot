@@ -34,7 +34,7 @@ async def handle_file(client, message):
     except Exception as e:
         await message.reply(f"Error: {str(e)}")
 
-# ===== DOWNLOAD (SAFE METHOD) =====
+# ===== DOWNLOAD =====
 @app.route("/file/<int:file_id>")
 def download(file_id):
 
@@ -43,8 +43,8 @@ def download(file_id):
 
     async def get_file():
         msg = await bot.get_messages(CHANNEL_ID, file_id)
-        file_path = await bot.download_media(msg)
-        return file_path
+        path = await bot.download_media(msg)
+        return path
 
     try:
         file_path = loop.run_until_complete(get_file())
