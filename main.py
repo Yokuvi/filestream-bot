@@ -24,29 +24,46 @@ tg = Client(
 # ===== BOT =====
 @tg.on_message(filters.command("start") & filters.private)
 async def start(client, message):
-    await message.reply("🔥 Bot working!\nSend me any file 😎")
+    await message.reply("🔥 Bot working!\nSend or forward file 😎")
 
-@tg.on_message(filters.private & (filters.document | filters.video | filters.audio))
+@tg.on_message(filters.private)
 async def handle_file(client: Client, message: Message):
-    msg = await message.copy(CHANNEL_ID)
+
+    file = message.document or message.video or message.audio
+
+    # DIRECT FILE
+    if file:
+        msg = await message.copy(CHANNEL_ID)
+
+    # FORWARDED FILE
+    elif message.forward_from_chat and message.forward_from_message_id:
+        try:
+            msg = await client.copy_message(
+                chat_id=CHANNEL_ID,
+                from_chat_id=message.forward_from_chat.id,
+                message_id=message.forward_from_message_id
+            )
+        except Exception as e:
+            return await message.reply("❌ Cannot access forwarded file")
+
+    else:
+        return await message.reply("❌ Send or forward a valid file")
+
     link = f"{BASE_URL}/file/{msg.id}"
 
-    await message.reply(
-        f"✅ Uploaded!\n\n⚡ Fast Link:\n{link}"
-    )
+    await message.reply(f"⚡ Link:\n{link}")
 
-# ===== STREAM =====
+# ===== STREAM (FIXED) =====
 @app.route("/file/<int:file_id>")
 def stream(file_id):
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
-    async def get_file():
-        msg = await tg.get_messages(CHANNEL_ID, file_id)
-        return msg
+    async def get_msg():
+        return await tg.get_messages(CHANNEL_ID, file_id)
 
-    msg = loop.run_until_complete(get_file())
+    msg = loop.run_until_complete(get_msg())
 
     async def generator():
         async for chunk in tg.stream_media(msg):
