@@ -43,7 +43,7 @@ async def handle_file(client: Client, message: Message):
                 from_chat_id=message.forward_from_chat.id,
                 message_id=message.forward_from_message_id
             )
-        except Exception as e:
+        except:
             return await message.reply("❌ Cannot access forwarded file")
 
     else:
@@ -51,25 +51,33 @@ async def handle_file(client: Client, message: Message):
 
     link = f"{BASE_URL}/file/{msg.id}"
 
-    await message.reply(f"⚡ Link:\n{link}")
+    await message.reply(f"⚡ Download Link:\n{link}")
 
-# ===== STREAM (FIXED) =====
+# ===== STREAM (DOWNLOAD FIX) =====
 @app.route("/file/<int:file_id>")
 def stream(file_id):
-
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
-    async def get_msg():
-        return await tg.get_messages(CHANNEL_ID, file_id)
+    async def get_file():
+        msg = await tg.get_messages(CHANNEL_ID, file_id)
+        file_path = await tg.download_media(msg)
+        return file_path
 
-    msg = loop.run_until_complete(get_msg())
+    try:
+        file_path = loop.run_until_complete(get_file())
+    except Exception as e:
+        return f"Error: {str(e)}", 500
 
-    async def generator():
-        async for chunk in tg.stream_media(msg):
-            yield chunk
+    def generate():
+        with open(file_path, "rb") as f:
+            while True:
+                chunk = f.read(1024 * 1024)
+                if not chunk:
+                    break
+                yield chunk
 
-    return Response(generator(), headers={
+    return Response(generate(), headers={
         "Content-Disposition": "attachment"
     })
 
