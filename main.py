@@ -21,31 +21,20 @@ bot = Client(
 )
 
 # ===== BOT =====
-@bot.on_message(filters.private)
-async def handle(client, message):
+@bot.on_message(filters.command("start") & filters.private)
+async def start(client, message):
+    await message.reply("Send any file. I’ll give you a download link.")
 
-    # ignore commands
-    if message.text and message.text.startswith("/"):
-        await message.reply("Send file or forward file.")
-        return
-
-    file = message.document or message.video or message.audio
-
+@bot.on_message(filters.private & filters.media)
+async def handle_file(client, message):
     try:
-        if file:
-            msg = await message.copy(CHANNEL_ID)
+        # copy file to channel
+        msg = await message.copy(CHANNEL_ID)
 
-        elif message.forward_from_chat and message.forward_from_message_id:
-            msg = await client.copy_message(
-                chat_id=CHANNEL_ID,
-                from_chat_id=message.forward_from_chat.id,
-                message_id=message.forward_from_message_id
-            )
-        else:
-            return
-
+        # generate link
         link = f"{BASE_URL}/file/{msg.id}"
-        await message.reply(link)
+
+        await message.reply(f"⚡ Download Link:\n{link}")
 
     except Exception as e:
         await message.reply(f"Error: {str(e)}")
@@ -59,8 +48,8 @@ def download(file_id):
 
     async def get_file():
         msg = await bot.get_messages(CHANNEL_ID, file_id)
-        file_path = await bot.download_media(msg)
-        return file_path
+        path = await bot.download_media(msg)
+        return path
 
     try:
         file_path = loop.run_until_complete(get_file())
