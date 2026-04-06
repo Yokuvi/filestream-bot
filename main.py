@@ -1,17 +1,14 @@
 import os
 import threading
 import asyncio
-from flask import Flask, send_file
+from flask import Flask, Response
 from pyrogram import Client, filters
 
 # ===== CONFIG =====
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-
-# ⚠️ USE USERNAME INSTEAD OF -100 ID
-CHANNEL_ID = os.getenv("CHANNEL_ID")  # example: mychannel
-
+CHANNEL_ID = os.getenv("CHANNEL_ID")
 BASE_URL = os.getenv("BASE_URL")
 
 app = Flask(__name__)
@@ -26,34 +23,31 @@ bot = Client(
 # ===== BOT =====
 @bot.on_message(filters.command("start") & filters.private)
 async def start(client, message):
-    await message.reply("Send file. I’ll give link.")
+    await message.reply("Send file, I’ll give download link.")
 
 @bot.on_message(filters.private & filters.media)
 async def handle_file(client, message):
-    try:
-        msg = await message.copy(CHANNEL_ID)
-        link = f"{BASE_URL}/file/{msg.id}"
-        await message.reply(link)
-    except Exception as e:
-        await message.reply(f"Error: {str(e)}")
+    msg = await message.copy(CHANNEL_ID)
+    link = f"{BASE_URL}/file/{msg.id}"
+    await message.reply(link)
 
-# ===== DOWNLOAD =====
+# ===== STREAM DOWNLOAD =====
 @app.route("/file/<int:file_id>")
-def download(file_id):
+def stream(file_id):
+
+    async def generate():
+        msg = await bot.get_messages(CHANNEL_ID, file_id)
+        async for chunk in bot.stream_media(msg):
+            yield chunk
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
-    async def get_file():
-        msg = await bot.get_messages(CHANNEL_ID, file_id)
-        path = await bot.download_media(msg)
-        return path
+    gen = loop.run_until_complete(generate())
 
-    try:
-        file_path = loop.run_until_complete(get_file())
-        return send_file(file_path, as_attachment=True)
-    except Exception as e:
-        return f"ERROR: {str(e)}", 500
+    return Response(gen, headers={
+        "Content-Disposition": "attachment"
+    })
 
 # ===== RUN =====
 def run_web():
