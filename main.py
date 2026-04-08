@@ -2,15 +2,19 @@ import os
 import time
 import asyncio
 import aiofiles
+import requests
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from pyrogram import Client, filters
 
+# ===== CONFIG =====
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 BASE_URL = os.getenv("BASE_URL")
+
+UPLOADASH_API = os.getenv("UPLOADASH_API")  # 🔐 put your NEW key here
 
 CACHE_DIR = "cache"
 os.makedirs(CACHE_DIR, exist_ok=True)
@@ -30,20 +34,37 @@ async def startup():
 async def shutdown():
     await bot.stop()
 
-# ===== BACKGROUND CACHE =====
+# ===== UPLOADASH FUNCTION =====
+def upload_to_uploadash(file_path):
+    url = "https://uploadash.com/api/upload"
+
+    with open(file_path, "rb") as f:
+        files = {"file": f}
+        headers = {"Authorization": UPLOADASH_API}
+
+        res = requests.post(url, files=files, headers=headers)
+        data = res.json()
+
+        return data.get("link")
+
+# ===== CACHE DOWNLOAD =====
 async def cache_file(msg, path):
     if os.path.exists(path):
         return
-    try:
-        await bot.download_media(msg, file_name=path)
-    except:
-        pass
+    await bot.download_media(msg, file_name=path)
 
 # ===== BOT =====
 @bot.on_message(filters.private & filters.media)
 async def handle_file(client, message):
 
     msg = await message.copy(CHANNEL_ID)
+
+    size = 0
+    if msg.document:
+        size = msg.document.file_size
+    elif msg.video:
+        size = msg.video.file_size
+
     path = f"{CACHE_DIR}/{msg.id}"
 
     files_db[msg.id] = {
@@ -51,11 +72,22 @@ async def handle_file(client, message):
         "expiry": time.time() + 3600 * 6
     }
 
-    # 🔥 preload cache
+    # ===== SMALL FILE → UPLOADASH =====
+    if size < 100 * 1024 * 1024:  # <100MB
+        await bot.download_media(msg, file_name=path)
+
+        try:
+            link = upload_to_uploadash(path)
+            if link:
+                await message.reply(f"⚡ Fast Link:\n{link}")
+                return
+        except:
+            pass
+
+    # ===== BIG FILE → TELEGRAM CACHE =====
     asyncio.create_task(cache_file(msg, path))
 
     link = f"{BASE_URL}/file/{msg.id}"
-
     await message.reply(f"⚡ {link}")
 
 # ===== STREAM =====
@@ -81,21 +113,15 @@ async def serve(file_id: int):
 
     path = data["path"]
 
-    # ✅ If cached → instant
+    # cache hit
     if os.path.exists(path):
-        return StreamingResponse(
-            stream_file(path),
-            headers={"Content-Disposition": "attachment"}
-        )
+        return StreamingResponse(stream_file(path))
 
-    # ❌ If not cached → fallback to Telegram stream
+    # fallback Telegram stream
     msg = await bot.get_messages(CHANNEL_ID, file_id)
 
     async def tg_stream():
         async for chunk in bot.stream_media(msg):
             yield chunk
 
-    return StreamingResponse(
-        tg_stream(),
-        headers={"Content-Disposition": "attachment"}
-    )
+    return StreamingResponse(tg_stream())
