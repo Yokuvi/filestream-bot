@@ -1,5 +1,6 @@
 import os
 import time
+import asyncio
 import aiofiles
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -42,33 +43,29 @@ async def handle_file(client, message):
     elif msg.video:
         size = msg.video.file_size
 
-    expiry = time.time() + 3600 * 6
-
     files_db[msg.id] = {
-        "expiry": expiry,
+        "expiry": time.time() + 3600 * 12,
         "size": size,
         "path": f"{CACHE_DIR}/{msg.id}"
     }
 
     link = f"{BASE_URL}/file/{msg.id}"
-
     await message.reply(f"⚡ {link}")
 
-# ===== CACHE DOWNLOAD =====
-async def download_and_cache(msg, path):
+# ===== BACKGROUND PREFETCH =====
+async def prefetch(msg, path):
     if os.path.exists(path):
         return
-
     await bot.download_media(msg, file_name=path)
 
-# ===== RANGE SUPPORT =====
-async def file_stream(path, start=0, end=None):
+# ===== MULTI-CHUNK STREAM =====
+async def stream_file(path, start=0, end=None):
     async with aiofiles.open(path, "rb") as f:
         await f.seek(start)
         remaining = end - start if end else None
 
         while True:
-            chunk = await f.read(1024 * 1024)
+            chunk = await f.read(2 * 1024 * 1024)  # 2MB chunks
             if not chunk:
                 break
 
@@ -94,12 +91,20 @@ async def serve(file_id: int, request: Request):
     msg = await bot.get_messages(CHANNEL_ID, file_id)
     path = data["path"]
 
-    # download if not cached
+    # ===== PRE-WARM =====
     if not os.path.exists(path):
-        await download_and_cache(msg, path)
+        asyncio.create_task(prefetch(msg, path))
+
+    # wait a bit to avoid empty stream
+    for _ in range(5):
+        if os.path.exists(path):
+            break
+        await asyncio.sleep(0.5)
+
+    if not os.path.exists(path):
+        raise HTTPException(503, "Preparing file, retry in a few seconds")
 
     file_size = os.path.getsize(path)
-
     range_header = request.headers.get("range")
 
     if range_header:
@@ -115,13 +120,13 @@ async def serve(file_id: int, request: Request):
         }
 
         return StreamingResponse(
-            file_stream(path, start, end + 1),
+            stream_file(path, start, end + 1),
             status_code=206,
             headers=headers
         )
 
     return StreamingResponse(
-        file_stream(path),
+        stream_file(path),
         headers={
             "Content-Length": str(file_size),
             "Accept-Ranges": "bytes"
