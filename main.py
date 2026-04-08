@@ -2,7 +2,7 @@ import os
 import time
 import asyncio
 import aiofiles
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from pyrogram import Client, filters
 
@@ -30,26 +30,28 @@ async def startup():
 async def shutdown():
     await bot.stop()
 
-# ===== BACKGROUND DOWNLOAD =====
+# ===== BACKGROUND CACHE =====
 async def cache_file(msg, path):
     if os.path.exists(path):
         return
-    await bot.download_media(msg, file_name=path)
+    try:
+        await bot.download_media(msg, file_name=path)
+    except:
+        pass
 
 # ===== BOT =====
 @bot.on_message(filters.private & filters.media)
 async def handle_file(client, message):
 
     msg = await message.copy(CHANNEL_ID)
-
     path = f"{CACHE_DIR}/{msg.id}"
 
     files_db[msg.id] = {
         "path": path,
-        "expiry": time.time() + 3600 * 12
+        "expiry": time.time() + 3600 * 6
     }
 
-    # 🔥 IMPORTANT: preload file immediately
+    # 🔥 preload cache
     asyncio.create_task(cache_file(msg, path))
 
     link = f"{BASE_URL}/file/{msg.id}"
@@ -57,10 +59,10 @@ async def handle_file(client, message):
     await message.reply(f"⚡ {link}")
 
 # ===== STREAM =====
-async def file_stream(path):
+async def stream_file(path):
     async with aiofiles.open(path, "rb") as f:
         while True:
-            chunk = await f.read(2 * 1024 * 1024)
+            chunk = await f.read(1024 * 1024)
             if not chunk:
                 break
             yield chunk
@@ -79,14 +81,21 @@ async def serve(file_id: int):
 
     path = data["path"]
 
-    # ❌ if not ready → tell user
-    if not os.path.exists(path):
-        raise HTTPException(503, "File is preparing... try again in few seconds")
+    # ✅ If cached → instant
+    if os.path.exists(path):
+        return StreamingResponse(
+            stream_file(path),
+            headers={"Content-Disposition": "attachment"}
+        )
+
+    # ❌ If not cached → fallback to Telegram stream
+    msg = await bot.get_messages(CHANNEL_ID, file_id)
+
+    async def tg_stream():
+        async for chunk in bot.stream_media(msg):
+            yield chunk
 
     return StreamingResponse(
-        file_stream(path),
-        headers={
-            "Content-Disposition": "attachment",
-            "Accept-Ranges": "bytes"
-        }
+        tg_stream(),
+        headers={"Content-Disposition": "attachment"}
     )
