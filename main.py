@@ -1,21 +1,25 @@
 import os
 import time
-import asyncio
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse, HTMLResponse
+import aiofiles
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pyrogram import Client, filters
 
-API_ID = int(os.getenv("API_ID", "0"))
-API_HASH = os.getenv("API_HASH", "")
-BOT_TOKEN = os.getenv("BOT_TOKEN", "")
-CHANNEL_ID = os.getenv("CHANNEL_ID", "")
-BASE_URL = os.getenv("BASE_URL", "http://127.0.0.1:8000")
+# ===== CONFIG =====
+API_ID = int(os.getenv("API_ID"))
+API_HASH = os.getenv("API_HASH")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHANNEL_ID = os.getenv("CHANNEL_ID")
+BASE_URL = os.getenv("BASE_URL")
+
+CACHE_DIR = "cache"
+os.makedirs(CACHE_DIR, exist_ok=True)
 
 app = FastAPI()
 
 bot = Client("bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-links_db = {}  # file_id: {expiry, size}
+files_db = {}  # file_id: {expiry, size, path}
 
 # ===== START =====
 @app.on_event("startup")
@@ -37,71 +41,89 @@ async def handle_file(client, message):
         size = msg.document.file_size
     elif msg.video:
         size = msg.video.file_size
-    elif msg.audio:
-        size = msg.audio.file_size
 
-    expiry = 3600
-    links_db[msg.id] = {
-        "expiry": time.time() + expiry,
-        "size": size
+    expiry = time.time() + 3600 * 6
+
+    files_db[msg.id] = {
+        "expiry": expiry,
+        "size": size,
+        "path": f"{CACHE_DIR}/{msg.id}"
     }
 
     link = f"{BASE_URL}/file/{msg.id}"
 
-    await message.reply(f"⚡ Link:\n{link}")
+    await message.reply(f"⚡ {link}")
 
-# ===== STATUS PAGE =====
-@app.get("/file/{file_id}", response_class=HTMLResponse)
-async def status_page(file_id: int):
+# ===== CACHE DOWNLOAD =====
+async def download_and_cache(msg, path):
+    if os.path.exists(path):
+        return
 
-    if file_id not in links_db:
-        return "Invalid link"
+    await bot.download_media(msg, file_name=path)
 
-    size = links_db[file_id]["size"]
+# ===== RANGE SUPPORT =====
+async def file_stream(path, start=0, end=None):
+    async with aiofiles.open(path, "rb") as f:
+        await f.seek(start)
+        remaining = end - start if end else None
 
-    # fake ETA logic (approx)
-    speed = 5 * 1024 * 1024  # 5MB/s assumption
-    eta = int(size / speed)
+        while True:
+            chunk = await f.read(1024 * 1024)
+            if not chunk:
+                break
 
-    return f"""
-    <html>
-    <head>
-        <title>Preparing Download</title>
-    </head>
-    <body style="background:#111;color:#fff;text-align:center;margin-top:100px;font-family:sans-serif;">
-        <h2>⏳ Preparing your file...</h2>
-        <p>Estimated time: {eta} seconds</p>
-        <p>File size: {round(size/1024/1024,2)} MB</p>
-        <p>Please wait...</p>
+            if remaining:
+                if len(chunk) > remaining:
+                    chunk = chunk[:remaining]
+                remaining -= len(chunk)
 
-        <script>
-            setTimeout(function(){{
-                window.location.href = "/download/{file_id}";
-            }}, 2000);
-        </script>
-    </body>
-    </html>
-    """
-
-# ===== ACTUAL DOWNLOAD =====
-@app.get("/download/{file_id}")
-async def stream(file_id: int):
-
-    if file_id not in links_db:
-        raise HTTPException(404)
-
-    if time.time() > links_db[file_id]["expiry"]:
-        raise HTTPException(403, "Link expired")
-
-    msg = await bot.get_messages(CHANNEL_ID, file_id)
-
-    async def generator():
-        async for chunk in bot.stream_media(msg):
             yield chunk
 
+# ===== ROUTE =====
+@app.get("/file/{file_id}")
+async def serve(file_id: int, request: Request):
+
+    if file_id not in files_db:
+        raise HTTPException(404)
+
+    data = files_db[file_id]
+
+    if time.time() > data["expiry"]:
+        raise HTTPException(403, "Expired")
+
+    msg = await bot.get_messages(CHANNEL_ID, file_id)
+    path = data["path"]
+
+    # download if not cached
+    if not os.path.exists(path):
+        await download_and_cache(msg, path)
+
+    file_size = os.path.getsize(path)
+
+    range_header = request.headers.get("range")
+
+    if range_header:
+        start, end = range_header.replace("bytes=", "").split("-")
+        start = int(start)
+        end = int(end) if end else file_size - 1
+
+        headers = {
+            "Content-Range": f"bytes {start}-{end}/{file_size}",
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(end - start + 1),
+            "Content-Type": "application/octet-stream"
+        }
+
+        return StreamingResponse(
+            file_stream(path, start, end + 1),
+            status_code=206,
+            headers=headers
+        )
+
     return StreamingResponse(
-        generator(),
+        file_stream(path),
         headers={
-            "Content-Disposition": "attachment"
+            "Content-Length": str(file_size),
+            "Accept-Ranges": "bytes"
         }
     )
