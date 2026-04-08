@@ -3,3 +3,4 @@ tgcrypto
 fastapi
 uvicorn
 aiofiles
+requests
